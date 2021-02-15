@@ -14,6 +14,11 @@ from urllib import request
 import statistics
 import time
 
+import bs4 as bs
+import pickle
+import requests
+from sklearn import preprocessing
+
 style.use('bmh')
 register_matplotlib_converters()
 
@@ -52,10 +57,6 @@ def grab_npsx_data(ticker, date_list, download=False):
                 except:
                     print("Date "+date+" does not exist")
                     continue
-            else:
-                continue
-    else:
-        pass
 
     d = []
     for file in sorted(glob.glob("nasdaq-psx/*.txt")):
@@ -84,10 +85,6 @@ def grab_nbx_data(ticker, date_list, download=False):
                 except:
                     print("Date "+date+" does not exist")
                     pass
-            else:
-                continue
-    else:
-        pass
 
     d = []
     for file in sorted(glob.glob("nasdaq-nbx/*.txt")):
@@ -120,10 +117,6 @@ def grab_finra_data(ticker, date_list,download=False):
                 except:
                     print("Date "+date+" does not exist")
                     pass
-            else:
-                continue
-    else:
-        pass
 
     d = []
     for file in sorted(glob.glob("finra/*.txt")):
@@ -141,10 +134,11 @@ def grab_finra_data(ticker, date_list,download=False):
     return ticker_data_frame
 
 
-def grab_stock_data(ticker, start, end, download = False):
-    if download:
-        sp_df = web.DataReader(ticker, 'yahoo', start, end)
-        sp_df.to_csv('ticker-data/'+ticker+'.csv')
+def grab_stock_data(ticker, d_list, download = False):
+    start = d_list[0]
+    end = d_list[-1]
+    sp_df = web.DataReader(ticker, 'yahoo', start, end)
+    sp_df.to_csv('ticker-data/'+ticker+'.csv')
 
     sp_df = pd.read_csv('ticker-data/'+ticker+'.csv', parse_dates=True,index_col=0)
     sp_df['pct_chng'] = (sp_df['Close'] - sp_df['Open']) / sp_df['Open']
@@ -152,7 +146,7 @@ def grab_stock_data(ticker, start, end, download = False):
 
     return sp_df
 
-#Handle for weekends!
+#Handle for holidays!
 def algorithm_accuracy(start, end, data_df, threshold = 0):
     delta = dt.timedelta(days=1)
     delta_two = dt.timedelta(days=2)
@@ -164,7 +158,6 @@ def algorithm_accuracy(start, end, data_df, threshold = 0):
 
     while current_date <= end:
         current_during_week = current_date.weekday()
-        #past_during_week = past_date.weekday()
         if current_during_week < 5 and current_during_week > 0:
             date_range_df = data_df.loc[past_date : current_date]
             corr_df = date_range_df.drop(['pct_chng'], axis=1).corr()
@@ -174,13 +167,14 @@ def algorithm_accuracy(start, end, data_df, threshold = 0):
                     psx_change = ( data_df.loc[str(current_date), 'N_PSX_SV'] - data_df.loc[str(past_date), 'N_PSX_SV'] ) / data_df.loc[str(past_date), 'N_PSX_SV']
                     finra_change = ( data_df.loc[str(current_date), 'Finra_SV'] - data_df.loc[str(past_date), 'Finra_SV'] ) / data_df.loc[str(past_date), 'Finra_SV']
                     qbx_change = ( data_df.loc[str(current_date), 'N_QBX_SV'] - data_df.loc[str(past_date), 'N_QBX_SV'] ) / data_df.loc[str(past_date), 'N_QBX_SV']
-                    #changes = [psx_change, finra_change, qbx_change]
-                    avg_change = (psx_change + finra_change + qbx_change) / 3
+                    changes = [psx_change, finra_change, qbx_change]
+                    avg_change = statistics.mean(changes)
                     #print("Average change:", avg_change)
-                    #changes_var = np.var(changes)
 
                     #Requirement passed: Correlation with positive movement
                     if avg_change > 0:
+                        changes_var = np.var(changes)
+
                         #Now check if the next day return is negative - in other words, check if the theory is correct for this specific day
                         if (data_df.loc[str(future_date), 'pct_chng']) < threshold:
                             success+=1
@@ -188,12 +182,6 @@ def algorithm_accuracy(start, end, data_df, threshold = 0):
                         total+=1
                 except:
                     pass
-                #print("Correlated: " + str(current_date))
-            else:
-                pass
-                #print("Not correlated: " + str(current_date))
-        else:  # 5 Sat, 6 Sun
-            pass
 
         past_date = current_date
         current_date += delta
@@ -216,7 +204,7 @@ def ticker_average(start, end, threshold, ticker_list, d_list, download):
         n_psx_df = grab_npsx_data(ticker, d_list, download)
         n_bx_df = grab_nbx_data(ticker, d_list, download)
         finra_df = grab_finra_data(ticker, d_list, download)
-        price_df = grab_stock_data(ticker, start, end)
+        price_df = grab_stock_data(ticker, d_list, download)
         all_data_df = finra_df.join([n_psx_df, n_bx_df, price_df])
 
         accuracy.append(algorithm_accuracy(start, end, all_data_df, threshold))
@@ -232,7 +220,7 @@ def graph_data(ticker, d_list, download):
     n_psx_df = grab_npsx_data(ticker,d_list, download)
     n_bx_df = grab_nbx_data(ticker,d_list, download)
     finra_df = grab_finra_data(ticker, d_list, download)
-    price_df = grab_stock_data(ticker, start, end, download)
+    price_df = grab_stock_data(ticker, d_list, download)
     all_data_df = finra_df.join([n_psx_df, n_bx_df, price_df])
 
     plt.figure(1, figsize=(20,10))
@@ -251,17 +239,34 @@ def graph_data(ticker, d_list, download):
     plt.show()
 
 
+def save_sp500_tickers():
+    resp = requests.get('http://en.wikipedia.org/wiki/List_of_S%26P_500_companies')
+    soup = bs.BeautifulSoup(resp.text, 'lxml')
+    table = soup.find('table', {'class': 'wikitable sortable'})
+    tickers = []
+    for row in table.findAll('tr')[1:]:
+        ticker = row.find_all('td')[0].text.replace('\n','')
+        tickers.append(ticker)
+
+    with open("sp500tickers.pickle","wb") as f:
+        pickle.dump(tickers,f)
+
+    return tickers
+
+
 #Options
 start = dt.date(2020, 12, 1)
 end = dt.date(2021, 2, 12)
-d_list = date_loop(start, end)
-download = False
-ticker = "ON"
-#hreshold = float(input("What dip threshold?: "))
-threshold = 0.05
-#ticker_list = ["ON"]
-ticker_list = ["APHA", "KT", "SNDL", "TLRY", "PLTR", "OGI", "MVIS", "NIO", "SENS", "TSLA", "SPCE", "DKNG", "ON", "MARA", "AMD"]
-#ticker_list = ["APHA", "CTRM", "KT", "SNDL", "TLRY", "ZOM", "VFF", "PLTR", "CCIV", "SOS", "OGI", "MVIS", "NIO", "SENS", "TSLA", "SPCE", "DKNG"]
+download = False #Change to true if you set the date further back
+graph = False #Change to true to use Graph
+threshold = 0.00 #Dip threshold (percent decrease in price to check)
+ticker_list = ["APHA", "KT", "SNDL", "TLRY", "PLTR", "OGI", "MVIS", "NIO", "SENS", "TSLA", "SPCE", "DKNG", "ON", "AMAT", "AMD", "OCGN", "MARA"]
+#ticker_list = save_sp500_tickers() #Uncomment if using the entire SP500 list
+#Note that some tickers in the SP500 don't trade on the NASDAQ, so you may get a "Ticker not found" error
 
+d_list = date_loop(start, end)
 average_accuracy = ticker_average(start, end, threshold, ticker_list, d_list, download)
-#graph_data(ticker, d_list, download)
+
+graph_ticker = "TSLA" #Ticker to graph
+if graph:
+    graph_data(ticker, d_list, download)
