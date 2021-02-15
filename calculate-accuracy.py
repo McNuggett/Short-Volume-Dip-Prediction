@@ -268,4 +268,4 @@ average_accuracy = ticker_average(start, end, threshold, ticker_list, d_list, do
 
 graph_ticker = "TSLA" #Ticker to graph
 if graph:
-    graph_data(ticker, d_list, download)
+    graph_data(graph_ticker, d_list, download)
