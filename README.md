@@ -9,3 +9,6 @@
 - Numpy
 
 - Matplotlib
+
+## Issues
+Holidays are not currently excluded from calculations - this may slightly impact accuracy.
