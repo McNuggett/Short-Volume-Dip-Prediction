@@ -17,7 +17,6 @@ import time
 import bs4 as bs
 import pickle
 import requests
-from sklearn import preprocessing
 
 style.use('bmh')
 register_matplotlib_converters()
